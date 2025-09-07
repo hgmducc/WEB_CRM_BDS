@@ -1,3 +1,16 @@
+/**
+ * File: src/compose/CRMPage.jsx
+ * Chức năng: Trang CRM quản lý danh sách căn hộ (demo), giao diện responsive.
+ * Bố cục & các hàm chính:
+ * - CRMPage: thành phần chính, hiển thị danh sách căn hộ, bộ lọc, tab, bảng và card.
+ * - Th, Td: thành phần table cell tuỳ chỉnh.
+ * - Select: thành phần select với label.
+ * - Info: hiển thị thông tin nhỏ trong card.
+ * - ChevronDown, PlusIcon, DownloadIcon, SearchIcon: các icon SVG.
+ * - tw: hàm nối class tailwind.
+ * - fmtArea: định dạng diện tích.
+ */
+
 import { useMemo, useState } from "react";
 
 /**

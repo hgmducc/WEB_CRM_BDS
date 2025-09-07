@@ -1,4 +1,21 @@
-// src/compose/UploadData.jsx
+/**
+ * File: src/compose/UploadData.jsx
+ * Chức năng: Thành phần React dùng để upload dữ liệu từ file Excel/JSON, chuẩn hoá và phân tách thành các bảng dữ liệu (căn hộ, chủ nhà, liên kết).
+ * Bố cục & các hàm chính:
+ * - HEADER_MAP: ánh xạ tên cột sang key chuẩn.
+ * - norm: chuẩn hoá chuỗi (loại dấu, khoảng trắng).
+ * - parsePhanKhu: tách phân khu từ mã căn.
+ * - normalizePhone: chuẩn hoá số điện thoại.
+ * - num: chuyển đổi giá trị sang số.
+ * - boolGoc: xác định căn góc.
+ * - downloadJson: tải dữ liệu dạng JSON.
+ * - mapRow: ánh xạ 1 dòng dữ liệu sang object chuẩn.
+ * - handleExcel: đọc file Excel, chuẩn hoá và phân tách dữ liệu.
+ * - handleLoadJsonFile: đọc file JSON, nạp dữ liệu.
+ * - handleDownloadJson: tải dữ liệu đã lưu ra file JSON.
+ * - UI: giao diện upload file, tải file, hiển thị số dòng đã đọc.
+ */
+
 import { useState, useRef } from "react";
 import * as XLSX from "xlsx";
 
@@ -137,7 +154,7 @@ export default function UploadData({ onParsed }) {
       Object.values(byCan).forEach((arr) => {
         arr.sort(
           (a, b) =>
-            (chuNhaMap.get(b.chuNhaId)?.sdt1 || "").length -
+            (chuNhaMap.get(b.chuNhaId)?.sdt1 || "").length - 
             (chuNhaMap.get(a.chuNhaId)?.sdt1 || "").length
         );
         if (arr[0]) arr[0].isPrimaryContact = true;

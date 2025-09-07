@@ -1,3 +1,16 @@
+/**
+ * File: src/compose/CRMBase.jsx
+ * Chức năng: Thành phần React hiển thị danh sách căn hộ CRM với bộ lọc, tìm kiếm, sắp xếp, modal ghi chú.
+ * Bố cục & các hàm chính:
+ * - CRMBase: thành phần chính, nhận props data, mode, callback, xử lý lọc/sắp xếp/tìm kiếm, hiển thị bảng và card.
+ * - Th, Td: thành phần table cell tuỳ chỉnh.
+ * - Select: thành phần select với label và icon.
+ * - InfoCard: hiển thị thông tin nhỏ trong card.
+ * - fmtArea, fmtGia: định dạng diện tích và giá.
+ * - modernBadge: style badge trạng thái.
+ * - getNhuCauColor, getNhuCauIcon: xác định màu và icon cho nhu cầu.
+ */
+
 // src/compose/CRMBase.jsx (Clean header: only search + filters, no sticky)
 import React from "react";
 import NoteModal from "./NoteModal";
@@ -424,7 +437,9 @@ function InfoCard({ icon, label, value, highlight = false }) {
     <div className={`p-3 rounded-2xl border ${highlight ? 'bg-green-50 border-green-200' : 'bg-gray-50/50 border-gray-200'}`}>
       <div className="flex items-center gap-2 mb-1">
         <span className="text-sm">{icon}</span>
-        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</span>
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+          {label}
+        </span>
         {highlight && <span className="text-green-500 text-xs">⭐</span>}
       </div>
       <div className={`font-bold text-sm ${highlight ? 'text-green-700' : 'text-gray-900'}`}>
