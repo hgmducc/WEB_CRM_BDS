@@ -1,11 +1,12 @@
+// src/compose/CanHoPage.jsx
 import React from "react";
 import { CRMBase } from "./CRMBase";
 
 function CanHoPage({ data = [], onSave, onCreateUnitByMaCan, onDeleteOwner }) {
-  // Căn hộ: hiển thị tất cả; CRMBase sẽ cho lọc/sort/search
+  // Căn hộ: hiển thị tất cả; CRMBase sẽ hỗ trợ lọc/sort/search
   return (
     <CRMBase
-      mode="all" // hiển thị tất cả
+      mode="all"
       data={Array.isArray(data) ? data : []}
       onSave={onSave}
       onCreateUnitByMaCan={onCreateUnitByMaCan}
@@ -15,3 +16,5 @@ function CanHoPage({ data = [], onSave, onCreateUnitByMaCan, onDeleteOwner }) {
 }
 
 export default React.memo(CanHoPage);
+
+

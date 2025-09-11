@@ -1,13 +1,30 @@
+// src/App.js
 import React, { useState, useMemo, useCallback, useEffect } from "react";
-import UploadData from "./compose/UploadData";
 import BanPage from "./compose/BanPage";
 import ThuePage from "./compose/ThuePage";
 import CanHoPage from "./compose/CanHoPage";
+import SettingsPage from "./compose/SettingsPage";
 import { ToastHost, toast } from "./components/Toast";
 
+// Firebase
+import { db, auth, ensureAuth, now } from "./lib/firebase";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  writeBatch,
+  getDocs,
+  query,
+  where,
+} from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+
+/* ================= Helpers ================= */
 const LS_KEY = "CRM_BDS_PAYLOAD_V1";
 
-// Utility
 const inferPhanKhu = (maCanRaw) => {
   const s = String(maCanRaw || "").trim();
   if (!s) return "";
@@ -15,6 +32,7 @@ const inferPhanKhu = (maCanRaw) => {
   if (/^TI/.test(tok)) return "ĐẢO";
   return tok;
 };
+
 const vnorm = (input = "") =>
   String(input || "")
     .normalize("NFD")
@@ -22,6 +40,23 @@ const vnorm = (input = "") =>
     .trim()
     .toLowerCase();
 
+/* Lấy ghi chú mới nhất từ mảng ghiChu (ưu tiên ts, sau đó tới date) */
+function pickLatestNote(ghiChu) {
+  if (!Array.isArray(ghiChu) || ghiChu.length === 0)
+    return { lastNoteText: "", lastNoteDate: "", lastNoteTs: 0 };
+
+  const sorted = [...ghiChu].sort(
+    (a, b) => (b.ts ?? 0) - (a.ts ?? 0) || String(b.date).localeCompare(String(a.date))
+  );
+  const n = sorted[0] || {};
+  return {
+    lastNoteText: String(n.content || "").trim(),
+    lastNoteDate: n.date || "",
+    lastNoteTs: n.ts || 0,
+  };
+}
+
+/* Chuẩn hoá payload -> mảng dòng cho UI + bổ sung lastNote* để hiển thị ngoài bảng */
 const flattenPayload = (payload) => {
   if (!payload) return [];
   const { canHo = {}, chuNha = {}, chuNha_canHo = [] } = payload;
@@ -29,11 +64,15 @@ const flattenPayload = (payload) => {
   return chuNha_canHo.map((lnk) => {
     const c = canHo[lnk.canHoId] || {};
     const o = chuNha[lnk.chuNhaId] || {};
+    const { lastNoteText, lastNoteDate, lastNoteTs } = pickLatestNote(c.ghiChu);
+
     return {
       canHoId: lnk.canHoId,
       chuNhaId: lnk.chuNhaId,
       isPrimaryContact: !!lnk.isPrimaryContact,
       role: lnk.role,
+
+      // Căn hộ
       maCan: c.maCan,
       phanKhu: c.phanKhu,
       loaiCan: c.loaiCan,
@@ -44,7 +83,13 @@ const flattenPayload = (payload) => {
       nhuCau: c.nhuCau,
       gia: c.gia,
       giaTot: c.giaTot,
-      ghiChu: c.ghiChu,
+      noiThat: c.noiThat,
+      ghiChu: c.ghiChu,        // giữ nguyên lịch sử để mở NoteModal
+      lastNoteText,
+      lastNoteDate,
+      lastNoteTs,
+
+      // Chủ
       hoTen: o.hoTen,
       tenNK: o.hoTen,
       tenChuNha: o.hoTen,
@@ -52,45 +97,6 @@ const flattenPayload = (payload) => {
       sdt2: o.sdt2,
     };
   });
-};
-
-const ensurePrimaryForCan = (payload, canHoId) => {
-  const { chuNha_canHo } = payload;
-  const group = chuNha_canHo.filter((x) => x.canHoId === canHoId);
-  if (group.length === 0) return payload;
-
-  const hasPrimary = group.some((x) => x.isPrimaryContact);
-  if (!hasPrimary) {
-    const idx = payload.chuNha_canHo.findIndex(
-      (x) => x.canHoId === canHoId && x.chuNhaId === group[0].chuNhaId
-    );
-    if (idx >= 0) payload.chuNha_canHo[idx].isPrimaryContact = true;
-  } else {
-    let seen = false;
-    for (const l of payload.chuNha_canHo) {
-      if (l.canHoId !== canHoId) continue;
-      if (l.isPrimaryContact && !seen) {
-        seen = true;
-      } else if (l.isPrimaryContact && seen) {
-        l.isPrimaryContact = false;
-      }
-    }
-  }
-  return payload;
-};
-
-const loadFromLS = () => {
-  try {
-    const raw = window.localStorage.getItem(LS_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !parsed.canHo || !parsed.chuNha || !Array.isArray(parsed.chuNha_canHo)) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
 };
 
 const saveToLS = (payload) => {
@@ -101,6 +107,7 @@ const saveToLS = (payload) => {
   }
 };
 
+/* ================ Small UI ================ */
 const TabButton = React.memo(({ id, children, isActive, onClick }) => (
   <button
     onClick={onClick}
@@ -115,9 +122,28 @@ const TabButton = React.memo(({ id, children, isActive, onClick }) => (
   </button>
 ));
 
+/* ================ Firestore path helpers ================ */
+const colCanHo = (tid) => collection(db, `tenants/${tid}/canHo`);
+const colChuNha = (tid) => collection(db, `tenants/${tid}/chuNha`);
+const colLinks = (tid) => collection(db, `tenants/${tid}/links`);
+const docCanHo = (tid, id) => doc(db, `tenants/${tid}/canHo/${id}`);
+const docChuNha = (tid, id) => doc(db, `tenants/${tid}/chuNha/${id}`);
+const docLink  = (tid, id) => doc(db, `tenants/${tid}/links/${id}`);
+
+/* ================ App ================ */
 export default function App() {
-  const [payload, setPayload] = useState(() => loadFromLS());
-  const [activeTab, setActiveTab] = useState("ban");
+  const [tenantId, setTenantId] = useState(null);
+  const [activeTab, setActiveTab] = useState("ban"); // ban | thue | canho | caidat
+
+  // Local state được build từ 3 snapshot realtime
+  const [canHoMap, setCanHoMap] = useState({});
+  const [chuNhaMap, setChuNhaMap] = useState({});
+  const [linksArr, setLinksArr] = useState([]);
+
+  const payload = useMemo(
+    () => ({ canHo: canHoMap, chuNha: chuNhaMap, chuNha_canHo: linksArr }),
+    [canHoMap, chuNhaMap, linksArr]
+  );
 
   const flat = useMemo(() => flattenPayload(payload), [payload]);
 
@@ -136,120 +162,238 @@ export default function App() {
     };
   }, [payload, flat]);
 
+  /* ======== Auth + lắng nghe realtime ======== */
+  useEffect(() => {
+    ensureAuth();
+    const unsub = onAuthStateChanged(auth, (user) => {
+      const tid = user?.uid || "demo";
+      setTenantId(tid);
+    });
+    return () => unsub();
+  }, []);
+
+  // Lắng nghe canHo
+  useEffect(() => {
+    if (!tenantId) return;
+    const unsub = onSnapshot(colCanHo(tenantId), (snap) => {
+      const m = {};
+      snap.forEach((d) => {
+        m[d.id] = { id: d.id, ...d.data() };
+      });
+      setCanHoMap(m);
+    });
+    return () => unsub();
+  }, [tenantId]);
+
+  // Lắng nghe chuNha
+  useEffect(() => {
+    if (!tenantId) return;
+    const unsub = onSnapshot(colChuNha(tenantId), (snap) => {
+      const m = {};
+      snap.forEach((d) => {
+        m[d.id] = { id: d.id, ...d.data() };
+      });
+      setChuNhaMap(m);
+    });
+    return () => unsub();
+  }, [tenantId]);
+
+  // Lắng nghe links
+  useEffect(() => {
+    if (!tenantId) return;
+    const unsub = onSnapshot(colLinks(tenantId), (snap) => {
+      const arr = [];
+      snap.forEach((d) => {
+        arr.push({ id: d.id, ...d.data() });
+      });
+      setLinksArr(arr);
+    });
+    return () => unsub();
+  }, [tenantId]);
+
+  // Cache local (optional)
   useEffect(() => {
     if (payload) saveToLS(payload);
   }, [payload]);
 
-  const handleLoaded = useCallback((pl) => setPayload(pl), []);
-
-  // Lưu cập nhật từ NoteModal (bao gồm SĐT & các field căn hộ)
-  const handleSave = useCallback(
-    (update) => {
-      if (!payload) return;
-      const canHoId =
-        update?.canHoId || update?.id || `${update?.maCan}|${inferPhanKhu(update?.maCan)}`;
-      if (!canHoId || !payload.canHo[canHoId]) return;
-
-      const allowedFields = new Set([
-        "gia",
-        "giaTot",
-        "nhuCau",
-        "ghiChu",
-        "loaiCan",
-        "dtDat",
-        "dienTich",
-        "goc",
-        "huong",
-        "noiThat",
-        "soPhongNgu",
-        "baoPhi",
-      ]);
-      const patch = Object.fromEntries(
-        Object.entries(update).filter(([k]) => allowedFields.has(k))
-      );
-
-      setPayload((prev) => {
-        const next = {
-          ...prev,
-          canHo: {
-            ...prev.canHo,
-            [canHoId]: { ...prev.canHo[canHoId], ...patch },
-          },
+  /* ======== Import payload từ SettingsPage -> ghi Firestore (merge) ======== */
+  const handleLoaded = useCallback(
+    async (pl) => {
+      if (!tenantId || !pl) return;
+      try {
+        const batchSize = 400;
+        const entries = {
+          canHo: Object.entries(pl.canHo || {}),
+          chuNha: Object.entries(pl.chuNha || {}),
+          links: (pl.chuNha_canHo || []).map((l) => [
+            `${l.canHoId}__${l.chuNhaId}`,
+            l,
+          ]),
         };
 
-        // cập nhật SĐT cho chủ hộ nếu có
-        if (update?.chuNhaId) {
-          const owner = next.chuNha?.[update.chuNhaId] || {};
-          next.chuNha = { ...(next.chuNha || {}) };
-          next.chuNha[update.chuNhaId] = {
-            ...owner,
-            sdt1: update.sdt1 || owner.sdt1,
-            sdt2: update.sdt2 || owner.sdt2,
-          };
-        }
-        return next;
-      });
+        const commitChunked = async (pairs, writer) => {
+          for (let i = 0; i < pairs.length; i += batchSize) {
+            const slice = pairs.slice(i, i + batchSize);
+            const batch = writeBatch(db);
+            slice.forEach(([id, data]) => writer(batch, id, data));
+            await batch.commit();
+          }
+        };
 
-      toast({ title: "Đã lưu", message: `Căn ${update?.maCan || ""} cập nhật thành công.` });
+        await commitChunked(entries.canHo, (batch, id, data) => {
+          batch.set(docCanHo(tenantId, id), { ...data, updatedAt: now() }, { merge: true });
+        });
+        await commitChunked(entries.chuNha, (batch, id, data) => {
+          batch.set(docChuNha(tenantId, id), { ...data, updatedAt: now() }, { merge: true });
+        });
+        await commitChunked(entries.links, (batch, id, data) => {
+          batch.set(docLink(tenantId, id), { ...data, updatedAt: now() }, { merge: true });
+        });
+
+        toast({ title: "Đã import dữ liệu", type: "success" });
+      } catch (e) {
+        console.error(e);
+        toast({ title: "Import thất bại", message: String(e?.message || e), type: "error" });
+      }
     },
-    [payload]
+    [tenantId]
   );
 
-  // Tạo căn mới + tự liên kết với chủ hiện tại
+  /* ======== SAVE: cập nhật căn hộ và/hoặc SĐT chủ ======== */
+  const handleSave = useCallback(
+    async (update) => {
+      if (!tenantId || !update) return;
+
+      try {
+        // 1) Cập nhật căn hộ
+        const canHoId =
+          update?.canHoId ||
+          update?.id ||
+          (update?.maCan ? `${update.maCan}|${inferPhanKhu(update.maCan)}` : null);
+
+        const allowedFields = new Set([
+          "gia",
+          "giaTot",
+          "nhuCau",
+          "ghiChu",
+          "loaiCan",
+          "dtDat",
+          "dienTich",
+          "goc",
+          "huong",
+          "noiThat",
+          "soPhongNgu",
+          "baoPhi",
+        ]);
+
+        const patch = Object.fromEntries(
+          Object.entries(update || {}).filter(([k]) => allowedFields.has(k))
+        );
+
+        if (canHoId && Object.keys(patch).length > 0) {
+          await setDoc(
+            docCanHo(tenantId, canHoId),
+            { ...patch, updatedAt: now() },
+            { merge: true }
+          );
+        }
+
+        // 2) Cập nhật SĐT chủ hộ (nếu có)
+        if (update?.chuNhaId && (update?.sdt1 !== undefined || update?.sdt2 !== undefined)) {
+          const { sdt1, sdt2 } = update;
+          await setDoc(
+            docChuNha(tenantId, update.chuNhaId),
+            {
+              ...(sdt1 !== undefined ? { sdt1 } : {}),
+              ...(sdt2 !== undefined ? { sdt2 } : {}),
+              updatedAt: now(),
+            },
+            { merge: true }
+          );
+        }
+
+        toast({ title: "Đã lưu thay đổi", type: "success" });
+      } catch (e) {
+        console.error(e);
+        toast({ title: "Lưu thất bại", message: String(e?.message || e), type: "error" });
+      }
+    },
+    [tenantId]
+  );
+
+  /* ======== TẠO CĂN MỚI + liên kết chủ hiện tại ======== */
   const handleCreateUnitByMaCan = useCallback(
-    (maCanRaw, ownerId) => {
+    async (maCanRaw, chuNhaId) => {
+      if (!tenantId) return;
       const maCan = String(maCanRaw || "").trim();
-      if (!maCan || !payload) return;
+      if (!maCan) return;
 
       const phanKhu = inferPhanKhu(maCan);
       const canHoId = `${maCan}|${phanKhu}`;
 
-      setPayload((prev) => {
-        const next = { ...prev };
-        if (!next.canHo) next.canHo = {};
-        if (!next.chuNha) next.chuNha = {};
-        if (!next.chuNha_canHo) next.chuNha_canHo = [];
+      try {
+        // 1) Tạo/ghi căn
+        await setDoc(
+          docCanHo(tenantId, canHoId),
+          { id: canHoId, maCan, phanKhu, updatedAt: now() },
+          { merge: true }
+        );
 
-        if (!next.canHo[canHoId]) {
-          next.canHo[canHoId] = { id: canHoId, maCan, phanKhu };
-        }
-        if (ownerId) {
-          next.chuNha_canHo.push({
-            canHoId,
-            chuNhaId: ownerId,
-            isPrimaryContact: true,
-            role: "Chủ sở hữu",
+        // 2) Liên kết chủ nếu có
+        if (chuNhaId) {
+          const linkId = `${canHoId}__${chuNhaId}`;
+          await setDoc(
+            docLink(tenantId, linkId),
+            {
+              canHoId,
+              chuNhaId,
+              isPrimaryContact: true,
+              role: "Chủ sở hữu",
+              updatedAt: now(),
+            },
+            { merge: true }
+          );
+
+          // 3) Đảm bảo chỉ 1 primary cho canHoId
+          const q = query(colLinks(tenantId), where("canHoId", "==", canHoId));
+          const snap = await getDocs(q);
+          const updates = [];
+          snap.forEach((d) => {
+            if (d.id !== linkId && d.data()?.isPrimaryContact) {
+              updates.push(
+                updateDoc(docLink(tenantId, d.id), {
+                  isPrimaryContact: false,
+                  updatedAt: now(),
+                })
+              );
+            }
           });
-          ensurePrimaryForCan(next, canHoId);
+          await Promise.all(updates);
         }
-        return next;
-      });
 
-      toast({
-        title: "Đã thêm căn mới",
-        message: `Tạo ${maCan} và liên kết với chủ hiện tại.`,
-        type: "success",
-      });
+        toast({ title: "Đã thêm căn mới", message: `Mã căn: ${maCan}`, type: "success" });
+      } catch (e) {
+        console.error(e);
+        toast({ title: "Thêm căn thất bại", message: String(e?.message || e), type: "error" });
+      }
     },
-    [payload]
+    [tenantId]
   );
 
+  /* ======== GỠ LIÊN KẾT CHỦ ======== */
   const handleDeleteOwner = useCallback(
-    ({ canHoId, chuNhaId }) => {
-      if (!payload) return;
-      setPayload((prev) => {
-        const next = {
-          ...prev,
-          chuNha_canHo: prev.chuNha_canHo.filter(
-            (lnk) => !(lnk.canHoId === canHoId && lnk.chuNhaId === chuNhaId)
-          ),
-        };
-        ensurePrimaryForCan(next, canHoId);
-        return next;
-      });
-      toast({ title: "Đã gỡ liên kết", type: "warning" });
+    async ({ canHoId, chuNhaId }) => {
+      if (!tenantId || !canHoId || !chuNhaId) return;
+      try {
+        const linkId = `${canHoId}__${chuNhaId}`;
+        await deleteDoc(docLink(tenantId, linkId));
+        toast({ title: "Đã gỡ liên kết chủ hộ", type: "info" });
+      } catch (e) {
+        console.error(e);
+        toast({ title: "Gỡ liên kết thất bại", message: String(e?.message || e), type: "error" });
+      }
     },
-    [payload]
+    [tenantId]
   );
 
   const handleTabClick = useCallback((tabId) => setActiveTab(tabId), []);
@@ -264,7 +408,9 @@ export default function App() {
   );
 
   const renderContent = () => {
-    if (!payload || flat.length === 0) {
+    if (activeTab === "caidat") return <SettingsPage onLoaded={handleLoaded} />;
+
+    if (flat.length === 0) {
       return (
         <div className="p-6 rounded-xl border bg-white shadow-sm">
           <div className="text-center">
@@ -280,7 +426,7 @@ export default function App() {
             </div>
             <h3 className="text-lg font-medium text-gray-900 mb-1">Chưa có dữ liệu</h3>
             <p className="text-sm text-gray-600">
-              Hãy <strong>tải file Excel/CSV</strong> ở phần trên để nhập dữ liệu vào hệ thống.
+              Hãy mở tab <strong>Cài đặt</strong> để <strong>nhập file Excel/CSV</strong>.
             </p>
           </div>
         </div>
@@ -308,19 +454,23 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 text-slate-800">
+      {/* Toast host */}
       <ToastHost />
+
       <header className="sticky top-0 z-10 bg-white/90 backdrop-blur-sm border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between gap-4 mb-4">
             <div className="flex items-center gap-4">
               <h1 className="text-xl font-bold text-gray-900">
                 CRM BĐS
-                <span className="text-sm font-normal text-gray-500 ml-2">(Demo Local)</span>
+                <span className="text-sm font-normal text-gray-500 ml-2">(Realtime)</span>
               </h1>
+
               <div className="hidden sm:flex items-center gap-2">
                 {renderTabButton("ban", `Bán (${stats.ban})`)}
                 {renderTabButton("thue", `Thuê (${stats.thue})`)}
                 {renderTabButton("canho", "Căn hộ")}
+                {renderTabButton("caidat", "Cài đặt")}
               </div>
             </div>
 
@@ -342,16 +492,13 @@ export default function App() {
         </div>
       </header>
 
+      {/* Tabs mobile */}
       <main className="max-w-7xl mx-auto px-4 py-6">
-        <div className="mb-6">
-          <UploadData onLoaded={handleLoaded} />
-        </div>
-
-        {/* Mobile tabs */}
         <div className="sm:hidden mb-4 flex gap-2 overflow-x-auto pb-2">
           {renderTabButton("ban", `Bán (${stats.ban})`)}
           {renderTabButton("thue", `Thuê (${stats.thue})`)}
           {renderTabButton("canho", "Căn hộ")}
+          {renderTabButton("caidat", "Cài đặt")}
         </div>
 
         {renderContent()}

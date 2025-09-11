@@ -69,6 +69,14 @@ function normalizePhone(raw) {
   return "";
 }
 
+// Chuẩn hoá chuỗi kiểu VN để so sánh không dấu/hoa-thường
+const vnNorm = (s = "") =>
+  String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+
 const NOITHAT_OPTIONS = [
   "hoàn thiện",
   "hoàn thiện cơ bản",
@@ -76,6 +84,7 @@ const NOITHAT_OPTIONS = [
   "hoàn thiện bên ngoài",
   "đang sửa",
 ];
+const NOITHAT_CANON = NOITHAT_OPTIONS.map(vnNorm);
 
 export default function NoteModal({
   row,
@@ -238,7 +247,11 @@ export default function NoteModal({
     };
     onSave?.(payload);
     setNoteInput("");
-    toast({ title: "Lưu thành công", message: `Đã cập nhật căn ${r.maCan || maCan}.` });
+    toast({
+      title: "Lưu thành công",
+      message: `Đã cập nhật căn ${r.maCan || maCan}.`,
+      type: "success",
+    });
   }
 
   function handleAddNewUnit() {
@@ -547,6 +560,8 @@ function InfoSection({
   editingPhone2,
   setEditingPhone2,
 }) {
+  const isAddDisabled = !String(newMaCan || "").trim();
+
   return (
     <div className="space-y-4">
       {/* Thông tin căn */}
@@ -743,8 +758,13 @@ function InfoSection({
               onChange={(e) => setNewMaCan(e.target.value)}
             />
             <button
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 transition-colors whitespace-nowrap"
+              className={`px-4 py-2 rounded-lg text-white text-sm transition-colors whitespace-nowrap ${
+                isAddDisabled
+                  ? "bg-blue-400 opacity-50 cursor-not-allowed"
+                  : "bg-blue-600 hover:bg-blue-700"
+              }`}
               onClick={handleAddNewUnit}
+              disabled={isAddDisabled}
             >
               Thêm
             </button>
@@ -814,7 +834,7 @@ function UpdateSection({
               </option>
             ))}
             {noiThat &&
-              !NOITHAT_OPTIONS.includes(String(noiThat).toLowerCase()) && (
+              !NOITHAT_CANON.includes(vnNorm(noiThat)) && (
                 <option value={noiThat}>{noiThat}</option>
               )}
           </select>

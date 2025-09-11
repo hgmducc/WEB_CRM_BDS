@@ -1,3 +1,4 @@
+// src/compose/ThuePage.jsx
 import React, { useMemo } from "react";
 import { CRMBase } from "./CRMBase";
 
@@ -17,7 +18,7 @@ function ThuePage({ data = [], onSave, onCreateUnitByMaCan, onDeleteOwner }) {
 
   return (
     <CRMBase
-      mode="thue" // ⚠️ ASCII: 'thue'
+      mode="thue"               // dùng ASCII 'thue'
       data={filtered}
       onSave={onSave}
       onCreateUnitByMaCan={onCreateUnitByMaCan}
